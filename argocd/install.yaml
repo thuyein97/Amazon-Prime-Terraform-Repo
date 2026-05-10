@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd
+---
+# Minimal placeholder: in production install ArgoCD via the Helm chart (recommended).
+# This file exists to represent the "bootstrap phase" that runs from the infra pipeline.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-bootstrap-placeholder
+  namespace: argocd
+data:
+  README: |
+    Replace this placeholder with:
+    - Helm install/upgrade of ArgoCD
+    - then apply infra/argocd/root-app.yaml (the app-of-apps entrypoint)
+

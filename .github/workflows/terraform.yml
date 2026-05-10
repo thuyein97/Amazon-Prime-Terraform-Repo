@@ -1,0 +1,107 @@
+name: infra-terraform
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "plan or apply"
+        required: true
+        default: "plan"
+        type: choice
+        options:
+          - plan
+          - apply
+      bootstrap_argocd:
+        description: "After apply, install ArgoCD and apply root app"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'apply' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        run: terraform init
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan
+        if: github.event_name != 'workflow_dispatch' || inputs.action == 'plan'
+        run: terraform plan -no-color
+
+      # NOTE:
+      # - Apply requires cloud credentials + state backend configured.
+      # - Keep apply manual via workflow_dispatch to reduce risk.
+      - name: Terraform apply
+        if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
+        run: terraform apply -auto-approve
+
+      - name: Setup kubectl
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'apply' && inputs.bootstrap_argocd }}
+        uses: azure/setup-kubectl@v4
+        with:
+          version: "latest"
+
+      - name: Setup Helm
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'apply' && inputs.bootstrap_argocd }}
+        uses: azure/setup-helm@v4
+
+      - name: Update kubeconfig (EKS)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'apply' && inputs.bootstrap_argocd }}
+        run: aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
+        env:
+          EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+
+      - name: Install/upgrade ArgoCD (Helm)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'apply' && inputs.bootstrap_argocd }}
+        run: |
+          helm repo add argo https://argoproj.github.io/argo-helm
+          helm repo update
+          helm upgrade --install argocd argo/argo-cd \
+            --namespace argocd --create-namespace \
+            --wait --timeout 10m
+
+      - name: Apply root app (app-of-apps)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'apply' && inputs.bootstrap_argocd }}
+        run: kubectl apply -f argocd/root-app.yaml
+      
+      - name: Wait for Argo CD
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'apply' && inputs.bootstrap_argocd }}
+        run: |
+          kubectl wait --for=condition=available --timeout=300s deployment/argocd-server -n argocd
+
+      - name: Argo CD UI (port-forward)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'apply' && inputs.bootstrap_argocd }}
+        run: |
+          echo "kubectl port-forward svc/argocd-server -n argocd 8080:443"
+          echo "kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath=\"{.data.password}\" | base64 -d; echo"
+
