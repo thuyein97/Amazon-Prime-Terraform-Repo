@@ -1,0 +1,64 @@
+name: admin-bootstrap
+
+on:
+  workflow_dispatch:
+    inputs:
+      state_bucket_name:
+        description: "Globally unique S3 bucket name for Terraform state"
+        required: true
+        type: string
+      aws_region:
+        description: "AWS region"
+        required: false
+        default: "ap-southeast-1"
+        type: string
+      create_github_oidc_provider:
+        description: "Create GitHub OIDC provider (false if it already exists)"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    name: "One-time AWS bootstrap"
+    runs-on: ubuntu-latest
+    environment: bootstrap
+    defaults:
+      run:
+        working-directory: admin-bootstrap
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # One-time only: set AWS_BOOTSTRAP_ACCESS_KEY_ID + AWS_BOOTSTRAP_SECRET_ACCESS_KEY
+      # in the bootstrap environment, then remove after this workflow succeeds.
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_BOOTSTRAP_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_BOOTSTRAP_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
+        run: terraform init
+
+      - name: Terraform apply
+        run: |
+          terraform apply -auto-approve \
+            -var="aws_region=${{ inputs.aws_region }}" \
+            -var="state_bucket_name=${{ inputs.state_bucket_name }}" \
+            -var="create_github_oidc_provider=${{ inputs.create_github_oidc_provider }}"
+
+      - name: Print outputs for GitHub secrets
+        run: |
+          echo "Add these as repository secrets, then delete AWS_BOOTSTRAP_* secrets:"
+          echo "AWS_ROLE_TO_ASSUME=$(terraform output -raw role_arn)"
+          echo "TF_STATE_BUCKET=$(terraform output -raw state_bucket_name)"
+          echo "AWS_REGION=${{ inputs.aws_region }}"
+          echo "EKS_CLUSTER_NAME=bankapp-eks"

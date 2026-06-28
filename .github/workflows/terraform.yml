@@ -2,8 +2,18 @@ name: infra-terraform
 
 on:
   pull_request:
+    paths:
+      - "**/*.tf"
+      - "**/*.tfvars.example"
+      - ".github/workflows/terraform.yml"
+      - "argocd/**"
   push:
     branches: ["main"]
+    paths:
+      - "**/*.tf"
+      - "**/*.tfvars.example"
+      - ".github/workflows/terraform.yml"
+      - "argocd/**"
   workflow_dispatch:
     inputs:
       action:
@@ -17,25 +27,27 @@ on:
       bootstrap_argocd:
         description: "After apply, install ArgoCD and apply root app"
         required: true
-        default: false
+        default: true
         type: boolean
 
 permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  terraform:
+  terraform-plan:
+    name: "Terraform Plan"
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: .
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.action == 'plan')
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Configure AWS credentials (OIDC)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'apply' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
@@ -43,46 +55,157 @@ jobs:
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
 
       - name: Terraform fmt
         run: terraform fmt -check -recursive
 
       - name: Terraform init
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=eks/terraform.tfstate" \
+            -backend-config="region=${{ secrets.AWS_REGION }}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
 
       - name: Terraform validate
         run: terraform validate
 
       - name: Terraform plan
-        if: github.event_name != 'workflow_dispatch' || inputs.action == 'plan'
-        run: terraform plan -no-color
+        run: |
+          terraform plan -no-color -out=tfplan
+          terraform show -no-color tfplan
 
-      # NOTE:
-      # - Apply requires cloud credentials + state backend configured.
-      # - Keep apply manual via workflow_dispatch to reduce risk.
+      - name: Upload plan artifact
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: tfplan
+          retention-days: 7
+
+  terraform-apply:
+    name: "Terraform Apply"
+    runs-on: ubuntu-latest
+    environment: production
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.action == 'apply')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=eks/terraform.tfstate" \
+            -backend-config="region=${{ secrets.AWS_REGION }}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+
+      - name: Terraform validate
+        run: terraform validate
+
       - name: Terraform apply
-        if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
         run: terraform apply -auto-approve
 
+  publish-gitops-bridge:
+    name: "Publish cluster-config to GitOps"
+    runs-on: ubuntu-latest
+    needs: terraform-apply
+    environment: production
+    if: ${{ always() && needs.terraform-apply.result == 'success' }}
+    steps:
+      - name: Checkout infra
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=eks/terraform.tfstate" \
+            -backend-config="region=${{ secrets.AWS_REGION }}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+
+      - name: Push cluster-config to GitOps repo
+        env:
+          GITOPS_TOKEN: ${{ secrets.GITOPS_REPO_TOKEN }}
+        run: |
+          terraform output -raw cluster_config_yaml > /tmp/cluster-config.yaml
+          git clone "https://x-access-token:${GITOPS_TOKEN}@github.com/thuyein97/gitops.git" gitops-checkout
+          mkdir -p gitops-checkout/clusters
+          cp /tmp/cluster-config.yaml gitops-checkout/clusters/cluster-config.yaml
+          cd gitops-checkout
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add clusters/cluster-config.yaml
+          git diff --staged --quiet && echo "No changes to cluster-config.yaml" && exit 0
+          git commit -m "chore: update cluster-config from infra terraform apply (${{ github.sha }})"
+          git push origin main
+
+  bootstrap-cd:
+    name: "Bootstrap ArgoCD"
+    runs-on: ubuntu-latest
+    needs: terraform-apply
+    environment: production
+    if: >-
+      ${{
+        always() &&
+        needs.terraform-apply.result == 'success' &&
+        (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.bootstrap_argocd))
+      }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
       - name: Setup kubectl
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'apply' && inputs.bootstrap_argocd }}
         uses: azure/setup-kubectl@v4
         with:
           version: "latest"
 
       - name: Setup Helm
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'apply' && inputs.bootstrap_argocd }}
         uses: azure/setup-helm@v4
 
       - name: Update kubeconfig (EKS)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'apply' && inputs.bootstrap_argocd }}
         run: aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
         env:
           EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
 
       - name: Install/upgrade ArgoCD (Helm)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'apply' && inputs.bootstrap_argocd }}
         run: |
           helm repo add argo https://argoproj.github.io/argo-helm
           helm repo update
@@ -90,18 +213,20 @@ jobs:
             --namespace argocd --create-namespace \
             --wait --timeout 10m
 
-      - name: Apply root app (app-of-apps)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'apply' && inputs.bootstrap_argocd }}
-        run: kubectl apply -f argocd/root-app.yaml
-      
-      - name: Wait for Argo CD
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'apply' && inputs.bootstrap_argocd }}
+      - name: Wait for Argo CD Controller Availability
         run: |
           kubectl wait --for=condition=available --timeout=300s deployment/argocd-server -n argocd
 
-      - name: Argo CD UI (port-forward)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'apply' && inputs.bootstrap_argocd }}
-        run: |
-          echo "kubectl port-forward svc/argocd-server -n argocd 8080:443"
-          echo "kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath=\"{.data.password}\" | base64 -d; echo"
+      - name: Apply root app (app-of-apps)
+        run: kubectl apply -f argocd/root-app.yaml
 
+      - name: Display Bootstrap Connection Info
+        run: |
+          echo "========================================================================="
+          echo "ArgoCD Successfully Bootstrapped!"
+          echo "To access the UI locally, run:"
+          echo "  kubectl port-forward svc/argocd-server -n argocd 8080:443"
+          echo ""
+          echo "To retrieve the admin initial login password, run:"
+          echo "  kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo"
+          echo "========================================================================="

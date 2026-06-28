@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/thuyein97/amazon-argocd.git
+    repoURL: https://github.com/thuyein97/gitops.git
     targetRevision: main
     path: root
   destination:
@@ -16,4 +16,3 @@ spec:
     automated:
       prune: true
       selfHeal: true
-

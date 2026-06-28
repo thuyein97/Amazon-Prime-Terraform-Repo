@@ -1,5 +1,7 @@
 terraform {
-  required_version = ">= 1.5.0"
+  required_version = ">= 1.11.0"
+
+  backend "s3" {}
 
   required_providers {
     aws = {
@@ -70,7 +72,7 @@ variable "vpc_cidr" {
 variable "node_instance_types" {
   type        = list(string)
   description = "EC2 instance types for EKS managed node group."
-  default     = ["t2.micro"]
+  default     = ["t3.small"]
 }
 
 variable "node_desired_size" {
@@ -89,6 +91,12 @@ variable "node_max_size" {
   type        = number
   description = "Maximum node count."
   default     = 1
+}
+
+variable "gitops_cluster_config_path" {
+  type        = string
+  description = "Local path for the GitOps bridge file; leave empty in CI."
+  default     = ""
 }
 
 module "vpc" {
@@ -158,7 +166,9 @@ locals {
 }
 
 resource "local_file" "gitops_cluster_config" {
-  filename        = "${path.module}/../gitops/clusters/cluster-config.yaml"
+  count = var.gitops_cluster_config_path != "" ? 1 : 0
+
+  filename        = var.gitops_cluster_config_path
   content         = local.cluster_config_yaml
   file_permission = "0644"
 }
@@ -176,5 +186,10 @@ output "cluster_endpoint" {
 output "oidc_issuer_url" {
   value       = module.eks.cluster_oidc_issuer_url
   description = "OIDC issuer URL for IAM Roles for Service Accounts."
+}
+
+output "cluster_config_yaml" {
+  value       = local.cluster_config_yaml
+  description = "GitOps bridge file content for clusters/cluster-config.yaml."
 }
 
