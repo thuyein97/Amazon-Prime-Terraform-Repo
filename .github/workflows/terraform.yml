@@ -17,15 +17,16 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: "plan or apply"
+        description: "Terraform operation"
         required: true
         default: "plan"
         type: choice
         options:
           - plan
           - apply
+          - destroy
       bootstrap_argocd:
-        description: "After apply, install ArgoCD and apply root app"
+        description: "After apply, install ArgoCD and apply root app (apply only)"
         required: true
         default: true
         type: boolean
@@ -42,7 +43,6 @@ jobs:
   terraform-plan:
     name: "Terraform Plan"
     runs-on: ubuntu-latest
-    environment: production
     if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.action == 'plan')
     steps:
       - name: Checkout
@@ -125,6 +125,49 @@ jobs:
       - name: Terraform apply
         run: terraform apply -auto-approve
 
+  terraform-destroy:
+    name: "Terraform Destroy"
+    runs-on: ubuntu-latest
+    environment: production
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=eks/terraform.tfstate" \
+            -backend-config="region=${{ secrets.AWS_REGION }}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan (destroy)
+        run: |
+          terraform plan -destroy -no-color -out=tfdestroy
+          terraform show -no-color tfdestroy
+
+      - name: Terraform destroy
+        run: terraform destroy -auto-approve
+
   publish-gitops-bridge:
     name: "Publish cluster-config to GitOps"
     runs-on: ubuntu-latest
@@ -160,7 +203,7 @@ jobs:
           GITOPS_TOKEN: ${{ secrets.GITOPS_REPO_TOKEN }}
         run: |
           terraform output -raw cluster_config_yaml > /tmp/cluster-config.yaml
-          git clone "https://x-access-token:${GITOPS_TOKEN}@github.com/thuyein97/gitops.git" gitops-checkout
+          git clone "https://x-access-token:${GITOPS_TOKEN}@github.com/thuyein97/amazon-argocd.git" gitops-checkout
           mkdir -p gitops-checkout/clusters
           cp /tmp/cluster-config.yaml gitops-checkout/clusters/cluster-config.yaml
           cd gitops-checkout

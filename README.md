@@ -11,12 +11,12 @@ This folder represents the **Infrastructure repo**. Everything runs through **Gi
 |-------|-----------|
 | **Pull request** | `fmt` → `init` → `validate` → `plan` (plan saved as artifact) |
 | **Merge to `main`** | `init` → `apply` → publish gitops bridge → bootstrap ArgoCD |
-| **Manual dispatch** | Choose `plan` or `apply`; optional ArgoCD bootstrap |
+| **Manual dispatch** | Choose `plan`, `apply`, or `destroy`; optional ArgoCD bootstrap on apply |
 
 Production controls in place:
 - **Remote state** — S3 with native lockfile (no local state files, no DynamoDB)
 - **OIDC auth** — no long-lived AWS keys in the main pipeline
-- **GitHub Environment `production`** — add required reviewers in repo Settings → Environments for apply/ArgoCD jobs
+- **GitHub Environment `production`** — add required reviewers in repo Settings → Environments for apply, destroy, and ArgoCD jobs
 - **Concurrency lock** — prevents overlapping applies on the same branch
 - **Path filters** — pipeline runs only when Terraform/ArgoCD files change
 
