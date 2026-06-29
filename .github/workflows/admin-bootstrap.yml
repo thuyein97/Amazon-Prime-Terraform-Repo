@@ -17,6 +17,14 @@ on:
         required: false
         default: true
         type: boolean
+      terraform_action:
+        description: "Terraform action to perform"
+        required: true
+        default: "apply"
+        type: choice
+        options:
+          - apply
+          - destroy
 
 permissions:
   contents: read
@@ -50,10 +58,10 @@ jobs:
 
       - name: Terraform apply
         run: |
-          terraform apply -auto-approve \
+          terraform ${{ inputs.terraform_action }} -auto-approve \
             -var="aws_region=${{ inputs.aws_region }}" \
             -var="state_bucket_name=${{ inputs.state_bucket_name }}" \
-            -var="create_github_oidc_provider=${{ inputs.create_github_oidc_provider }}"
+            -var="create_github_oidc_provider=${{ inputs.create_github_oidc_provider }}" \
 
       - name: Print outputs for GitHub secrets
         run: |
