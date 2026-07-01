@@ -137,8 +137,8 @@ module "eks" {
 
   access_entries = {
     local_admin = {
-      principal_arn     = "arn:aws:iam::534856791031:user/terraform_user"
-      type              = "STANDARD"
+      principal_arn = "arn:aws:iam::534856791031:user/terraform_user"
+      type          = "STANDARD"
 
       policy_associations = {
         admin = {
