@@ -42,7 +42,7 @@ Run the **admin-bootstrap** workflow (`Actions → admin-bootstrap → Run workf
 | `AWS_REGION` | e.g. `ap-southeast-1` |
 | `EKS_CLUSTER_NAME` | e.g. `bankapp-eks` |
 | `TF_STATE_BUCKET` | bootstrap output `state_bucket_name` |
-| `GITOPS_REPO_TOKEN` | PAT with `repo` scope on `thuyein97/gitops` |
+| `GITOPS_REPO_TOKEN` | PAT with `repo` scope on `thuyein97/amazon-argocd` |
 
 #### Step 3 — Enable production environment gate (recommended)
 
@@ -60,13 +60,13 @@ flowchart LR
   Merge --> Apply[CI init + apply]
   Apply --> GitOps[Push cluster-config]
   Apply --> ArgoCD[Bootstrap ArgoCD]
-  ArgoCD --> Apps[ArgoCD syncs gitops/root]
+  ArgoCD --> Apps[ArgoCD syncs amazon-argocd/root]
 ```
 
 1. Open a PR → CI runs `terraform plan`
 2. Review and merge to `main`
 3. CI automatically runs `terraform init`, `terraform apply`, publishes `clusters/cluster-config.yaml`, and bootstraps ArgoCD
-4. ArgoCD syncs apps from `https://github.com/thuyein97/gitops.git`
+4. ArgoCD syncs apps from `https://github.com/thuyein97/amazon-argocd.git`
 
 ### What you never need to run locally
 

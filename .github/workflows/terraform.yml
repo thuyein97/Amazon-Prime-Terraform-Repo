@@ -203,10 +203,10 @@ jobs:
           GITOPS_TOKEN: ${{ secrets.GITOPS_REPO_TOKEN }}
         run: |
           terraform output -raw cluster_config_yaml > /tmp/cluster-config.yaml
-          git clone "https://x-access-token:${GITOPS_TOKEN}@github.com/thuyein97/amazon-argocd.git" gitops-checkout
-          mkdir -p gitops-checkout/clusters
-          cp /tmp/cluster-config.yaml gitops-checkout/clusters/cluster-config.yaml
-          cd gitops-checkout
+          git clone "https://x-access-token:${GITOPS_TOKEN}@github.com/thuyein97/amazon-argocd.git" amazon-argocd-checkout
+          mkdir -p amazon-argocd-checkout/clusters
+          cp /tmp/cluster-config.yaml amazon-argocd-checkout/clusters/cluster-config.yaml
+          cd amazon-argocd-checkout
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add clusters/cluster-config.yaml
