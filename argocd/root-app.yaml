@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/thuyein97/gitops.git
+    repoURL: https://github.com/thuyein97/amazon-argocd.git
     targetRevision: main
     path: root
   destination:
