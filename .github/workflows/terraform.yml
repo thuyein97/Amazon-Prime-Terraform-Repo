@@ -251,10 +251,22 @@ jobs:
 
       - name: Install/upgrade ArgoCD (Helm)
         run: |
+          set -euo pipefail
           helm repo add argo https://argoproj.github.io/argo-helm
           helm repo update
+
+          # The redis-secret-init hook runs on every upgrade and often stays Pending on
+          # small/spot clusters that are already full after the first install.
+          kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+          if ! kubectl get secret argocd-redis -n argocd >/dev/null 2>&1; then
+            kubectl create secret generic argocd-redis -n argocd \
+              --from-literal=auth="$(openssl rand -base64 32)"
+          fi
+          kubectl delete job -n argocd -l app.kubernetes.io/name=argocd-redis-secret-init --ignore-not-found
+
           helm upgrade --install argocd argo/argo-cd \
-            --namespace argocd --create-namespace \
+            --namespace argocd \
+            --set redisSecretInit.enabled=false \
             --wait --timeout 10m
 
       - name: Wait for Argo CD Controller Availability
